@@ -58,5 +58,7 @@ BSD-style license: http://synthcode.com/license.txt
 
 `SSAX-SXML`
 By Dmitry Lizorkin
+
 The software is vailable on [sourceforge](http://ssax.sourceforge.net/).
+
 Documentation at [okmij.org](http://okmij.org/ftp/Scheme/xml.html).
