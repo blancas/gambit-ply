@@ -44,3 +44,19 @@ TBW
 Copyright © 2012 Armando Blancas.
 
 This software is published under the [MIT License](http://opensource.org/licenses/MIT).
+
+## Acknowledgements
+
+Gambit Ply uses IRREGEX and SSAX-SXML, which are included
+for convenience. The rights and credit for those libraries
+belong to their respective authors.
+
+`IrRegular Expressions`
+
+Copyright (c) 2005-2012 Alex Shinn.  All rights reserved.
+BSD-style license: http://synthcode.com/license.txt
+
+`SSAX-SXML`
+By Dmitry Lizorkin
+The software is vailable on [sourceforge](http://ssax.sourceforge.net/).
+Documentation at [okmij.org](http://okmij.org/ftp/Scheme/xml.html).
