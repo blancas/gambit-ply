@@ -1,0 +1,10 @@
+#!/usr/local/Gambit-C/bin/gsi
+
+;; +--------------------------------------+
+;; |  Copies chars from stdin to stdout.  |
+;; +--------------------------------------+
+
+(include "../plylib/ply-io.scm")
+
+(:call-with-stdin
+  (lambda (c) (write-char c)))

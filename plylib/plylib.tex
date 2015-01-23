@@ -1,0 +1,1112 @@
+;; +---------------------------------------------------------------------+
+;; |  GAMBIT PLY                                                         |
+;; |  A high-productivity function library for Gambit-C.                 |
+;; |                                                                     |
+;; |  Copyright 2012 Armando Blancas                                     |
+;; +---------------------------------------------------------------------+
+
+;; Prevent compile errors by third-party libs.
+
+  sed -e 's/filter/local-filter/g' -i scm irregex.scm
+  sed -e 's/fold/local-fold/g' -i scm irregex.scm
+  sed -e 's/read-line (opt/local-read-line (opt/g' -i scm ssax-sxml/libs/input-parse.scm
+
+;; Error messages.
+
+(define E_NOT_AGGREGATE "Value is not string, list, vector, or pair.")
+(define E_EMPTY_LIST    "The list must not be empty.")
+(define E_EMPTY_VECTOR  "The vector must not be empty.")
+(define E_WRONG_ARITY   "Wrong number of arguments.")
+(define E_OUT_OF_RANGE  "Number out of range.")
+
+
+;; +---------------------------------------------------------------------+
+;; |                                                                     |
+;; |                          BASIC FUNCTIONS                            |
+;; |                                                                     |
+;; +---------------------------------------------------------------------+
+
+ 
+;; The identity function.
+;;
+;; Returns its argument.
+(define (:id x) x)
+
+
+;; Not equal.
+;;
+;; (!= a b c) is the same as (not (= a b c))
+;;
+;; It means that not all args are equal; it does't test for each
+;; arg being different from the rest or its neighborgs.
+;;
+;; Returns a boolean.
+(define (!= . args)
+  (not (apply = args)))
+
+
+;; Complement of a predicate fn.
+;;
+;; The complement function calls fn and returns the
+;; opposite truth value.
+;;
+;; Returns a predicate that produces (not fn).
+(define (:complement fn)
+  (lambda args
+    (not (apply fn args))))
+
+
+;; Flips the argument of a binary operator.
+;;
+;; Returns an operator with fn's arguemnts in the opposite order.
+(define (:flip fn)
+  (lambda (x y) (fn y x)))
+
+
+;; Partial function application.
+;;
+;; Composes a function that will apply a function fn with the
+;; arguments args already set. The composed function will take
+;; the rest of the arguments and return the result from fn.
+;;
+;; Returns a function that will take the rest of fn's arguments.
+(define (:partial fn . args) 
+  (lambda lst (apply fn (append args lst))))
+
+
+;; Returns n + 1.
+(define (:inc n) (+ n 1))
+
+
+;; Returns n - 1.
+(define (:dec n) (- n 1))
+
+
+;; Tests for a singleton list.
+;;
+;; Returns a boolean.
+(define (:single? lst)
+  (and (not (null? lst)) (null? (cdr lst))))
+
+
+;; Concatenates strings.
+;;
+;; It takes string argumments or a single list of strings.
+;;
+;; Returns a string.
+(define (:str . args)
+  (define (val->str v)
+    (with-output-to-string '() (lambda () (display v))))
+  (cond ((null? args) "")
+        ((pair? (car args)) (apply :str (car args)))
+        (else (apply string-append (map val->str args)))))
+
+
+;; Concatenates strings with spaces between them.
+;;
+;; It takes string argumments or a single list of strings.
+;;
+;; Returns a string.
+(define (:strsp . args)
+  (apply :str (:interpose " " args)))
+
+
+;; Creates a memoized version of f.
+;;
+;; The new function works like f but keeps a table of key-value 
+;; for args and return value. Subsequent calls with the same 
+;; arguments produce the value with a table lookup.
+;;
+;; Returns a function.
+(define (:memoize f)
+  (let ((table (make-table))
+        (miss (make-table)))
+    (lambda args
+      (let ((ref (table-ref table args miss)))
+        (if (not (eqv? ref miss))
+          ref
+          (let ((value (apply f args)))
+            (table-set! table args value)
+            value))))))
+
+
+;; +---------------------------------------------------------------------+
+;; |                                                                     |
+;; |                          BASIC MACROS                               |
+;; |                                                                     |
+;; +---------------------------------------------------------------------+
+
+
+;; Ignores the given forms. Use only at the top level.
+;;
+;; (comment (define max 1024))
+;;
+;; Returns no value.
+(define-macro (:comment . forms) (void))
+
+
+;; Expands a macro call.
+;;
+;; Uses (pp) so the expanded macro appears inside a no-arg function.
+;;
+;; Returns a string.
+(define-macro (:ppm form)
+  `(pp (lambda () ,form (void))))
+
+
+;; Sets x up by 1.
+;;
+;; Returns no value.
+(define-macro (++ x) 
+  `(set! ,x (:inc ,x)))
+
+
+;; Sets x down by 1.
+;;
+;; Returns no value.
+(define-macro (-- x)
+  `(set! ,x (:dec ,x)))
+
+
+;; Swaps the value of two variables.
+;;
+;; Returns no value.
+(define-macro (:swap! x y)
+  (let ((tmp (gensym)))
+    `(let ((,tmp ,x))
+       (set! ,x ,y)
+       (set! ,y ,tmp))))
+
+
+;; Like if, but only the true consequent and multiple forms.
+;;
+;; (when (> 5 2)
+;;   (display "math still works"))
+;;   (newline))
+;;
+;; Returns the value of the last form, or no value.
+(define-macro (:when test . body)
+  `(if ,test (begin ,@body) (void)))
+
+
+;; The opposite of when.
+;;
+;; (unless (< 5 2) (display "math still works"))
+;;
+;; Returns the value of the last form, or no value.
+(define-macro (:unless test . body)
+  `(if ,test (void) (begin ,@body)))
+
+
+;; Evaluates a block for each element of a list.
+;;
+;; Returns no value.
+(define-macro (:dolist bind . body)
+  `(for-each
+     (lambda (,(car bind)) ,@body)
+     ,(cadr bind)))
+
+;; Evaluates a block multiple times for side effects.
+;;
+;; (dotimes (k 5)
+;;   (println k))
+;;
+;; Returns no value.
+(define-macro (:dotimes bind . body)
+  (let ((symbol (car bind))
+        (limit (cadr bind)))
+    `(:dolist (,symbol (:range ,limit)) ,@body)))
+
+
+;; Evaluates a block while a condition holds true.
+;;
+;; (define x 0)
+;; (while (< x 5)
+;;   (set! x (+ x 1))
+;;   (print x)
+;;   (newline))
+;;
+;; Returns the value of the last form, or no value.
+(define-macro (:while test . body)
+  `(let loop ()
+     (:when ,test
+       ,@body 
+       (loop))))
+
+
+;; Threads previous values through forms.
+;;
+;; Starting with value x, makes calls from left to right
+;; with each subsequent form, using x or the previous result
+;; as the first argument.
+;;
+;; Returns the result of the rightmost combination.
+(define-macro (-> x . forms)
+  (cond ((null? forms) 
+           x)
+        ((:single? forms) 
+           (if (pair? (car forms))
+             `(,(caar forms) ,x ,@(cdar forms))
+             (list (car forms) x)))
+        (else 
+           `(-> (-> ,x ,(car forms)) ,@(cdr forms)))))
+
+
+;; Threads previous values through forms.
+;;
+;; Starting with value x, makes calls from left to right
+;; with each subsequent form, using x or the previous result
+;; as the last argument.
+;;
+;; Returns the result of the rightmost combination.
+(define-macro (->> x . forms)
+  (cond ((null? forms) 
+           x)
+        ((:single? forms) 
+           (if (pair? (car forms))
+             `(,(caar forms) ,@(cdar forms) ,x)
+             (list (car forms) x)))
+        (else 
+           `(->> (->> ,x ,(car forms)) ,@(cdr forms)))))
+
+
+;; +---------------------------------------------------------------------+
+;; |                                                                     |
+;; |                              LISTS                                  |
+;; |                                                                     |
+;; +---------------------------------------------------------------------+
+
+
+;; Returns the nth element in obj.
+;;
+;; For string, list, vector, pair.
+(define (:nth obj n)
+  (cond ((string? obj) (string-ref obj n))
+        ((list? obj)   (list-ref obj n))
+        ((vector? obj) (vector-ref n))
+        ((pair? obj)   (if (zero? n) (car obj) (cdr obj)))
+        (else          (error "(:nth)" E_NOT_AGGREGATE obj))))
+
+
+;; Counts the elements in obj.
+;;
+;; For string, list, vector, pair.
+;;
+;; Returns the count as an integer; zero if obj is an atom.
+(define (:count obj)
+  (cond ((string? obj) (string-length obj))
+        ((list? obj)   (length obj))
+        ((vector? obj) (vector-length obj))
+        ((pair? obj)   2)
+        (else          (error "(:count)" E_NOT_AGGREGATE obj))))
+
+
+;; Like cons, but adds an element at the end.
+;;
+;; Returns a new list.
+(define (:snoc lst x)
+  (if (null? lst)
+    (cons x lst)
+    (cons (car lst) (:snoc (cdr lst) x))))
+
+
+;; Concatenates (appends) the results of map.
+;;
+;; Function fn should return a list.
+;;
+;; A flat list with the elements.
+(define (:mapcat fn arg . rest)
+  (apply append (map fn (cons arg rest))))
+
+
+;; Left fold.
+;;
+;; Applies the function fn to an initial value and the first
+;; element of lst; fn is then applied to its last result and
+;; each successive element of lst.
+;;
+;; Returns the value of the last application of fn.
+(define (:foldl fn acc lst)
+  (if (null? lst)
+      acc
+      (:foldl fn (fn acc (car lst)) (cdr lst))))
+
+
+;; Left fold one.
+;;
+;; A left fold whose initial value is the first element of lst.
+;;
+;; Returns the value of the last application of fn.
+(define (:foldl1 fn lst)
+  (if (null? lst)
+    (error "(:foldl1)" E_EMPTY_LIST)
+    (:foldl fn (car lst) (cdr lst))))
+
+
+;; Right fold.
+;;
+;; Applies the function fn to an initial value and the last
+;; element of lst; fn is then applied to its last result and 
+;; each successive previous element of lst.
+;;
+;; Returns the value of the last application of fn.
+(define (:foldr fn acc lst)
+  (if (null? lst)
+      acc
+      (fn (car lst) (:foldr fn acc (cdr lst)))))
+
+
+;; Right fold one.
+;;
+;; A right fold whose initial value is the last element of lst.
+;;
+;; Returns the value of the last application of fn.
+(define (:foldr1 fn lst)
+  (if (null? lst)
+    (error "(:foldr1)" E_EMPTY_LIST)
+    (letrec ((F (lambda (l)
+                  (if (null? (cdr l)) 
+                    (car l)
+                    (fn (car l) (F (cdr l)))))))
+      (F lst))))
+
+
+;; Right fold A.K.A. fold or reduce.
+(define :fold   :foldr)
+(define :reduce :foldr)
+
+
+;; Unfold.
+;;
+;; Generates a list starting with init, and subsequent elements
+;; produced by applying fn to the previous element until the
+;; application of pred to the current element returns true.
+;;
+;; Returns a list with the generated values.
+(define (:unfold fn init pred)
+  (if (pred init)
+      (cons init '())
+      (cons init (:unfold fn (fn init) pred))))
+
+
+;; Function composition operator.
+;;
+;; Composes a function that will apply the rightmost function given
+;; to this operator against any arguments; then it will apply the
+;; rest of the functions, from right to left, to the result of the
+;; previous function application.
+;;
+;; Returns an n-ary function that will apply the given functions.
+(define (:compose . fns)
+  (define (C f g)
+    (lambda args
+      (call-with-values (lambda () (apply g args)) f)))
+  (:foldr1 C fns))
+
+
+;; Repeats n times the object x.
+;;
+;; Returns a string is x is a char; a list, otherwise.
+(define (:repeat n x)
+  (if (char? x) 
+    (make-string n x)
+    (letrec ((R (lambda (n) 
+                  (if (positive? n) 
+                    (cons x (R (:dec n)))
+                    (quote ())))))
+      (R n))))
+
+
+;; List accessor shortcuts.
+(define :1st car)
+(define :2nd cadr)
+(define :3rd caddr)
+(define :4th cadddr)
+(define :5th (:compose car    cddddr))
+(define :6th (:compose cadr   cddddr))
+(define :7th (:compose caddr  cddddr))
+(define :8th (:compose cadddr cddddr))
+
+
+;; Tests if val is a member of lst.
+(define (:member? val lst)
+  (:foldl (lambda (x y) (or x (eqv? y val))) #f lst))
+
+
+;; Generates a list of numbers.
+;;
+;; The range is specified by low (inclusive), high (exclusive),
+;; and step, which gives the increment (or decrement, if negative).
+;; There are three forms:
+;; (:range high)          -- from zero to high-1.
+;; (:range low high)      -- from low to high-1, step 1.
+;; (:range low high step) -- from low to high-1, varying by step.
+;;
+;; Returns a list with the specified range, which may be empty.
+(define (:range . args)
+  (case (:count args)
+    ((0) (quote ()))
+    ((1) (:range 0 (:1st args) 1))
+    ((2) (:range (:1st args) (:2nd args) 1))
+    ((3) (let* ((low  (:1st args))
+                (high (:2nd args))
+                (step (:3rd args))
+                (comp (if (positive? step) <= >=))
+                (pred (lambda (n) (comp high (+ n step)))))
+         (if (pred low)
+           (quote ())
+           (:unfold (:partial + step) low pred))))
+    (else (error "(:range)" E_WRONG_ARITY))))
+
+
+;; Selects elements from a list.
+;;
+;; pred must be a one-argument predicate. This function
+;; applies the predicate to each element in lst and
+;; collects those for which the predicate returns true.
+;;
+;; Returns a new list; possibly empty.
+(define (:filter pred lst)
+  (let ((F (lambda (x y) (if (pred x) (cons x y) y))))
+    (:reduce F '() lst)))
+
+
+;; Removes elements from a list.
+;;
+;; pred must be a one-argument predicate. This function
+;; applies the predicate to each element in lst and
+;; collects those for which the predicate returns false.
+;;
+;; Returns a new list; possibly empty.
+(define (:remove pred lst)
+  (:filter (:complement pred) lst))
+
+
+;; Selects the first n elements from a list.
+;;
+;; Returns a new list; possibly empty.
+(define (:take n lst)
+  (if (or (zero? n) (null? lst))
+    (quote ())
+    (cons (car lst) (:take (:dec n) (cdr lst)))))
+
+
+;; Selects elements from a list.
+;;
+;; pred must be a one-argument predicate. This function
+;; applies the predicate to each element in lst and
+;; collects them as long as pred returns true.
+;;
+;; Returns a new list; possibly empty.
+(define (:take-while pred lst)
+  (cond ((null? lst)      (quote ()))
+        ((pred (car lst)) (cons (car lst) (:take-while pred (cdr lst))))
+        (else             (quote ()))))
+
+
+;; Selects the last n elements from a list.
+;;
+;; Returns a new list; possibly empty.
+(define (:take-right n lst)
+  (let loop ((lag lst) (lead (:drop n lst)))
+    (if (pair? lead)
+      (loop (cdr lag) (cdr lead))
+      lag)))
+
+
+;; Removes the first n elements from a list.
+;;
+;; Returns a new list; possibly empty.
+(define (:drop n lst)
+  (if (or (zero? n) (null? lst))
+    lst
+    (:drop (:dec n) (cdr lst))))
+
+
+;; Removes elements from a list.
+;;
+;; pred must be a one-argument predicate. This function
+;; applies the predicate to each element in lst and
+;; drops them as long as pred returns true.
+;;
+;; Returns a new list; possibly empty.
+(define (:drop-while pred lst)
+  (cond ((null? lst)      (quote ()))
+        ((pred (car lst)) (:drop-while pred (cdr lst)))
+        (else             lst)))
+
+
+;; Removes the last n elements from a list.
+;;
+;; Returns a new list; possibly empty.
+(define (:drop-right n lst)
+  (let loop ((lag lst) (lead (:drop n lst)))
+    (if (pair? lead)
+      (cons (car lag) (loop (cdr lag) (cdr lead)))
+      (quote ()))))
+
+
+;; Creates a list from values and a new list.
+;;
+;; The last argument must be a list. The rest are cons'ed to the last
+;; from right to left.
+;;
+;; Returns a new list.
+(define (:list* . args)
+  (:reduce cons (:take-right 1 args) (:drop-right 1 args)))
+
+
+;; Returns the last element in lst.
+(define (:last lst)
+  (:take-right 1 lst))
+
+
+;; Returns a copy of lst with the last element removed.
+(define (:butlast lst)
+  (:drop-right 1 lst))
+
+
+;; Tests if all elements in lst satisfy the predicate pred.
+;;
+;; Returns a boolean value.
+(define (:all? pred lst)
+  (:foldl (lambda (x y) (and x (pred y))) #t lst))
+
+
+;; Tests if any element in lst satisfies the predicate pred.
+;;
+;; Returns a boolean value.
+(define (:any? pred lst)
+  (:foldl (lambda (x y) (or x (pred y))) #f lst))
+
+
+;; Interleaves the elements of lists.
+;;
+;; Generates a list with the first element of each list, then
+;; the second elements, and so on as long as no list is null.
+;;
+;; Returns a new list; possibly empty.
+(define (:interleave . args)
+  (if (:any? null? args)
+    (quote ())
+    (append (map car args) (apply :interleave (map cdr args)))))
+
+
+;; Interposes a separator between the elements of a list.
+;;
+;; A copy of lst with its elements separated by sep.
+(define (:interpose sep lst)
+  (if (null? lst)
+    (quote ())
+    (letrec ((I (lambda (l)
+                  (if (null? (cdr l))
+                    l
+                    (cons (car l) (cons sep (I (cdr l))))))))
+      (I lst))))
+
+
+;; Flattens a list with nested lists.
+;;
+;; Returns a flat list with all the elements in order.
+(define (:flatten lst)
+  (cond ((null? lst) lst)
+        ((pair? (car lst)) (append (:flatten (car lst)) (:flatten (cdr lst))))
+        (else (cons (car lst) (:flatten (cdr lst))))))
+
+
+;; Partitions a list into sublists.
+;;
+;; Each sublist contains n elements, shifted by step from
+;; the previous sublist. Discards last < n elements.
+;;
+;; Returns a list of lists.
+(define (:partition n step lst)
+  (:unless (positive? step)
+    (error "(:partition) argument step" E_OUT_OF_RANGE))
+  (letrec ((P (lambda (l)
+                (if (null? l)
+                  (quote ())
+                  (let ((p (:take n l)))
+                    (if (= n (:count p))
+                      (cons (:take n l) (P (:drop step l)))
+                      (quote ())))))))
+    (P lst)))
+
+
+;; Creates a two-list tuple from lst.
+;;
+;; The first list has the initial elements for which the
+;; predicate returns true. The second has the rest of lst.
+;;
+;; Returns a list of two lists.
+(define (:span pred lst)
+  (cond ((null? lst) 
+           (list '() '()))
+        ((pred (car lst))
+           (let* ((tmp (:span pred (cdr lst)))
+                  (ys (:1st tmp))
+                  (zs (:2nd tmp)))
+             (list (cons (car lst) ys) zs)))
+        (else
+           (list '() lst))))
+
+
+;; Creates a two-list tuple from lst.
+;;
+;; The first list has the initial elements for which the
+;; predicate returns false. The second has the rest of lst.
+;;
+;; Returns a list of two lists.
+(define (:break pred lst)
+  (:span (:complement pred) lst))
+
+
+;; Zips two lists into pairs from each.
+;;
+;; If one list is longer the rest is discarded.
+;;
+;; Returns a list of tuples.
+(define (:zip l1 l2)
+  (if (or (null? l1) (null? l2))
+    (quote ())
+    (cons (list (car l1) (car l2)) 
+          (:zip (cdr l1) (cdr l2)))))
+
+
+;; +---------------------------------------------------------------------+
+;; |                                                                     |
+;; |                               VECTORS                               |
+;; |                                                                     |
+;; +---------------------------------------------------------------------+
+
+
+;; Vector left fold.
+;;
+;; Applies the function fn to an initial value and the first
+;; element of vec; fn is then applied to its last result and
+;; each successive element of vec.
+;;
+;; Returns the value of the last application of fn.
+(define (:vfoldl fn init vec)
+  (letrec ((len (vector-length vec))
+           (F (lambda (acc idx)
+                (if (= idx len)
+                  acc
+                  (F (fn acc (vector-ref vec idx)) (:inc idx))))))
+    (F init 0)))
+
+
+;; Vector left fold one.
+;;
+;; A left fold whose initial value is the first element of vec.
+;;
+;; Returns the value of the last application of fn.
+(define (:vfoldl1 fn vec)
+  (if (zero? (vector-length vec))
+    (error "(:vfoldl1)" E_EMPTY_VECTOR)
+    (:vfoldl fn (vector-ref vec 0) (subvector vec 1 (vector-length vec)))))
+
+
+;; Vector right fold.
+;;
+;; Applies the function fn to an initial value and the last
+;; element of vec; fn is then applied to its last result and 
+;; each successive previous element of vec.
+;;
+;; Returns the value of the last application of fn.
+(define (:vfoldr fn init vec)
+  (letrec ((F (lambda (acc idx)
+                (if (negative? idx)
+                  acc
+                  (F (fn (vector-ref vec idx) acc) (:dec idx))))))
+    (F init (:dec (vector-length vec)))))
+
+
+;; Vector right fold one.
+;;
+;; A right fold whose initial value is the last element of vec.
+;;
+;; Returns the value of the last application of fn.
+(define (:vfoldr1 fn vec)
+  (if (zero? (vector-length vec))
+    (error "(:vfoldr1)" E_EMPTY_VECTOR)
+    (let ((end-idx (:dec (vector-length vec))))
+      (:vfoldr fn (vector-ref vec end-idx) (subvector vec 0 end-idx)))))
+
+
+;; +---------------------------------------------------------------------+
+;; |                                                                     |
+;; |                              SETS                                   |
+;; |                                                                     |
+;; +---------------------------------------------------------------------+
+
+
+;; Tests if lst has no duplicate elements.
+(define (:set? lst)
+  (cond ((null? lst) #t)
+        ((:member? (car lst) (cdr lst)) #f)
+        (else (:set? (cdr lst)))))
+
+
+;; Makes a set off a list.
+;;
+;; Returns a new list with no duplicates.
+(define (:make-set lst)
+  (cond ((null? lst) (quote ()))
+        ((:member? (car lst) (cdr lst)) (:make-set (cdr lst)))
+        (else (cons (car lst) (:make-set (cdr lst))))))
+
+
+;; Tests if sub is a subset of set.
+(define (:subset? sub set)
+  (if (null? sub) 
+    #t
+    (and (:member? (car sub) set) 
+         (:subset? (cdr sub) set))))
+
+
+;; Tests if any member of set1 belongs to set2.
+(define (:intersect? set1 set2)
+  (if (null? set1)
+    #f
+    (or (:member? (car set1) set2)
+        (:intersect? (cdr set1) set2))))
+
+
+;; Returns the intersection of two sets.
+(define (:intersect set1 set2)
+  (cond ((null? set1) (quote ()))
+        ((:member? (car set1) set2) (cons (car set1) (:intersect (cdr set1) set2)))
+        (else (:intersect (cdr set1) set2))))
+
+
+;; Returns the union of two sets.
+(define (:union set1 set2)
+  (cond ((null? set1) set2)
+        ((:member? (car set1) set2) (:union (cdr set1) set2))
+        (else (cons (car set1) (:union (cdr set1) set2)))))
+
+
+;; Returns the elements in set1 that do not belong to set2.
+(define (:diff set1 set2)
+  (cond ((null? set1) (quote ()))
+        ((:member? (car set1) set2) (:diff (cdr set1) set2))
+        (else (cons (car set1) (:diff (cdr set1) set2)))))
+
+
+;; +---------------------------------------------------------------------+
+;; |                                                                     |
+;; |                              I/O                                    |
+;; |                                                                     |
+;; +---------------------------------------------------------------------+
+
+
+;; Reads the file fname into a string.
+;;
+;; fname is a string with a full or relative path.
+;;
+;; Returns a string.
+(define (:slurp fname)
+  (call-with-input-file fname
+    (lambda (port) 
+      (read-line port #f))))
+
+
+;; Writes a string into the file fname.
+;;
+;; fname is a string with a full or relative path.
+;;
+;; Returns no value.
+(define (:spit str fname)
+  (call-with-output-file fname
+    (lambda (port) 
+      (write-substring str 0 (string-length str) port))))
+
+
+;; Reads all the text from an input port.
+;;
+;; It closes the port after reading.
+;;
+;; Returns the text as a string.
+(define (:slurp-port port)
+  (let ((text (read-line port #f)))
+    (close-input-port port)
+    text))
+
+
+;; Writes a string into an output port.
+;;
+;; It closes the port after writing.
+;;
+;; Returns no value.
+(define (:spit-port str port)
+  (display str port)
+  (close-output-port port))
+
+
+;; Reads the text of a URL.
+;;
+;; A port number is optional and defaults to 80.
+;;
+;; Returns the text as a string.
+(define (:get-url url . port)
+  (define (open-port server)
+    (if (:search ":[0-9]+" url)
+      (open-tcp-client server)
+      (let ((port-num (if (null? port) 80 (car port))))
+        (open-tcp-client (list server-address: server port-number: port-num)))))
+  (let* ((parts (:split "/" (:replace "https?://" "" url)))
+         (srv (car parts))
+         (cmd (if (null? (cdr parts))
+                "GET /\n"
+                (string-append "GET /" (cadr parts) "\n")))
+         (tcp (open-port srv)))
+    (:spit-port cmd tcp)
+    (:slurp-port tcp)))
+
+
+;; +---------------------------------------------------------------------+
+;; |                                                                     |
+;; |                            TESTING                                  |
+;; |                                                                     |
+;; +---------------------------------------------------------------------+
+
+;; Private declarations.
+
+(define-structure Test##_ name docstr fn)
+(define-structure Tally##_ total passed failed)
+
+(define :test-name##_)
+(define :test-doc##_)
+(define :test-flag##_)
+
+(define :total##_)
+(define :passed##_)
+(define :failed##_)
+
+
+;; Makes a test record.
+(define-macro (:make-test name . args)
+  (let* ((span (:span string? args))
+         (docstr (if (null? (car span)) "" (caar span)))
+         (forms (cadr span)))
+    `(make-Test##_ ',name ,docstr (lambda () ,@forms))))
+
+
+;; Asserts equality.
+(define-macro (:equal##_ op form expected . msg)
+  (let* ((fsym (gensym))
+         (asym (gensym))
+         (esym (gensym))
+         (newl (string #\newline))
+         (bind `((,fsym ',form)
+                 (,asym ,form)
+                 (,esym ,expected)))
+         (diag `(:str :test-name##_ " " :test-doc##_ ,newl
+                      "Evaluated: " ,fsym " ==> " ,asym ,newl
+                      "Expected:  " ,esym))
+         (text (if (null? msg) diag (:snoc diag (:str newl (car msg))))))
+    `(let ,bind
+       (:when (not (,op ,asym ,esym))
+         (raise ,text)))))
+
+(define-macro (:eqv? form expected . msg)
+  `(:equal##_ eqv? ,form ,expected ,@msg))
+
+(define-macro (:equal? form expected . msg)
+  `(:equal##_ equal? ,form ,expected ,@msg))
+
+
+;; Asserts inequality.
+(define-macro (:not-equal##_ op form expected . msg)
+  (let* ((fsym (gensym))
+         (asym (gensym))
+         (esym (gensym))
+         (newl (string #\newline))
+         (bind `((,fsym ',form)
+                 (,asym ,form)
+                 (,esym ,expected)))
+         (diag `(:str :test-name##_ " " :test-doc##_ ,newl
+                      "Incorrect: " ,fsym " ==> " ,asym))
+         (text (if (null? msg) diag (:snoc diag (:str newl (car msg))))))
+    `(let ,bind
+       (:when (,op ,asym ,esym)
+         (raise ,text)))))
+
+(define-macro (:not-eqv? form expected . msg)
+  `(:not-equal##_ eqv? ,form ,expected ,@msg))
+
+(define-macro (:not-equal? form expected . msg)
+  `(:not-equal##_ equal? ,form ,expected ,@msg))
+
+
+;; Asserts that form evaluates to #t.
+(define-macro (:true form . msg)
+  (let* ((fsym (gensym))
+         (asym (gensym))
+         (newl (string #\newline))
+         (bind `((,fsym ',form)
+                 (,asym ,form)))
+         (diag `(:str :test-name##_ " " :test-doc##_ ,newl
+                      "Evaluated: " ,fsym " ==> " ,asym ,newl
+                      "Expected:  #t"))
+         (text (if (null? msg) diag (:snoc diag (:str newl (car msg))))))
+    `(let ,bind
+       (:when (not ,asym)
+         (raise ,text)))))
+
+
+;; Asserts that form evaluates to #f.
+(define-macro (:false form . msg)
+  (let* ((fsym (gensym))
+         (asym (gensym))
+         (newl (string #\newline))
+         (bind `((,fsym ',form)
+                 (,asym ,form)))
+         (diag `(:str :test-name##_ " " :test-doc##_ ,newl
+                      "Evaluated: " ,fsym " ==> " ,asym ,newl
+                      "Expected:  #f"))
+         (text (if (null? msg) diag (:snoc diag (:str newl (car msg))))))
+    `(let ,bind
+       (:when ,asym
+         (raise ,text)))))
+
+
+;; Runs a test created with (:make-test).
+(define (:run-test test)
+  (with-exception-handler
+    (lambda (e)
+      (println e)
+      (set! :test-flag##_ #f))
+    (lambda ()
+      (set! :test-name##_ (symbol->string (Test##_-name test)))
+      (set! :test-doc##_ (Test##_-docstr test))
+      ((Test##_-fn test)))))
+
+
+;; Runs tests from the given file.
+(define (:run-tests file)
+  (set! :total##_ 0)
+  (set! :passed##_ 0)
+  (set! :failed##_ 0)
+  (:dolist (f (call-with-input-string (:slurp file) read-all))
+    (let ((t (eval f)))
+      (:when (Test##_? t)
+        (set! :test-flag##_ #t)
+        (:run-test t)
+        (++ :total##_)
+        (if :test-flag##_
+          (++ :passed##_) 
+          (++ :failed##_)))))
+  (println file "  total: " :total##_ 
+    "\tPassed: " :passed##_ "\tFailed: " :failed##_))
+
+
+;; Strips leading whitespace.
+;;
+;; Returns a new string.
+(define :ltrim
+  (let ((lead (string->irregex "^\\s*")))
+    (lambda (s)
+      (irregex-replace lead s ""))))
+
+
+;; Strips trailing whitespace.
+;;
+;; Returns a new string.
+(define :rtrim
+  (let ((trail (string->irregex "\\s*$")))
+    (lambda (s)
+      (irregex-replace trail s ""))))
+
+
+;; Strips leading and trailing whitespace.
+;;
+;; Returns a new string.
+(define (:trim s)
+  (:ltrim (:rtrim s)))
+
+
+;; Tests if the string str starts with the substring sub.
+(define (:starts-with str sub)
+  (if (irregex-search (string-append "^" sub) str) #t #f))
+
+
+;; Tests if the string str ends with the substring sub.
+(define (:ends-with str sub)
+  (if (irregex-search (string-append sub "$") str) #t #f))
+
+
+;; Searches a regular expression in a string.
+;;
+;; Returns the start index if found; #f otherwise.
+(define (:search re str)
+  (let ((m (irregex-search re str)))
+    (and m (irregex-match-start-index m))))
+
+
+;; Extracts all matches of a regular expression in a string.
+;;
+;; Returns a list; possibly empty.
+(define (:extract re str)
+  (irregex-extract re str))
+
+
+;; Replaces a match of a regular expression.
+;;
+;; Returns a new string with the change, if any.
+(define (:replace re txt str)
+  (irregex-replace re str txt))
+
+
+;; Replaces all matches of a regular expression.
+;;
+;; Returns a new string with the changes, if any.
+(define (:replace-all re txt str)
+  (irregex-replace/all re str txt))
+
+
+;; Breaks a string into parts.
+;;
+;; The string s is broken into pieces separated by
+;; matches of a regular expression re.
+;;
+;; A list string; may be empty. 
+(define (:split re s)
+  (irregex-split re s))
+
+
+;; Breaks a string into lines of text.
+;;
+;; A list where each element is a line; may be empty. 
+(define :lines
+  (let ((nl (string->irregex "\r?\n")))
+    (lambda (s)
+      (irregex-split nl s))))
+
+
+;; Collapses lines of text.
+;;
+;; Opposite of lines; the lines are separated by the newline character.
+;;
+;; Returns a string.
+(define (:unlines lst)
+  (:foldr1 (lambda (x y) (string-append  x "\n" y)) lst))
+
+
+;; Breaks a string into words.
+;;
+;; A list of strings; may be empty. 
+(define :words
+  (let ((ws (string->irregex "\\s")))
+    (lambda (s)
+      (irregex-split ws s))))
+
+
+;; Collapses words into a string.
+;;
+;; Opposite of words; the words are separated by spaces.
+;;
+;; Returns a string.
+(define (:unwords lst)
+  (:foldr1 (lambda (x y) (string-append  x " " y)) lst))

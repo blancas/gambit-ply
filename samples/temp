@@ -1,0 +1,17 @@
+#!/usr/local/Gambit-C/bin/gsi
+
+;; +--------------------------------------+
+;; |  Converts temperatures from F to C.  |
+;; +--------------------------------------+
+
+(include "../plylib/ply-string.scm")
+
+(define lower 0)
+(define upper 320)
+(define step 10)
+
+(define (f->c f)
+  (quotient (* 5 (- f 32)) 9))
+
+(:dolist (f (:range lower upper step))     
+    (println (:strw f 6) (:strw (f->c f) 6)))

@@ -1,0 +1,25 @@
+#!/usr/local/Gambit-C/bin/gsi
+
+;; +----------------------------------------------------+
+;; |  Prints counts of lines, words and chars like wc.  |
+;; +----------------------------------------------------+
+
+(include "../plylib/ply-io.scm")
+
+(define chars 0)
+(define words 0)
+(define lines 0)
+
+(define buf "")
+
+(:call-with-stdin
+  (lambda (c) 
+    (:inc! chars)
+    (if (char=? c #\newline)
+      (begin
+        (:inc! lines)
+        (set! words (+ words (:count (:words buf))))
+        (set! buf ""))
+      (set! buf (:str buf c)))))
+
+(println #\tab lines #\tab words #\tab chars)
